@@ -40,4 +40,4 @@ fn main() {
 
 ## License
 
-lrpc is provided under the MIT license. See [LICENSE](LICENSE).
+sys-datetime is provided under the MIT license. See [LICENSE](LICENSE).
