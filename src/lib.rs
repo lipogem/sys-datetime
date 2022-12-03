@@ -407,9 +407,13 @@ impl<'de> Deserialize<'de> for Datetime {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        match Datetime::from_str(&s) {
-            Some(r) => Ok(r),
-            None => Err(serde::de::Error::custom("The data format is not correct")),
+        if s.len() == 0 {
+            Ok(Datetime::default())
+        } else {
+            match Datetime::from_str(&s) {
+                Some(r) => Ok(r),
+                None => Err(serde::de::Error::custom("The data format is not correct")),
+            }
         }
     }
 }
