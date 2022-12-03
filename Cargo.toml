@@ -2,6 +2,12 @@
 name = "sys-datetime"
 version = "1.0.0"
 edition = "2021"
+license = "MIT"
+authors = ["lipogem"]
+description = "datetime"
+readme = "README.md"
+keywords = ["datetime", "date", "time"]
+repository = "https://github.com/lipogem/sys-datetime"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
