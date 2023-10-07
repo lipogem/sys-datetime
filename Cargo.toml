@@ -1,6 +1,6 @@
 [package]
 name = "sys-datetime"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 license = "MIT"
 authors = ["lipogem"]
@@ -18,4 +18,4 @@ postgres = ["sqlx/postgres"]
 [dependencies]
 serde = "1"
 regex = "1"
-sqlx = { version = "0.6", optional = true }
+sqlx = { version = "*", optional = true }
