@@ -308,6 +308,89 @@ impl Datetime {
         self.second as i64
     }
 
+    /// may be used to obtain the day of the week for dates on or after 0000-03-01
+    /// ```no_run
+    /// assert_eq!(
+    ///     Datetime::from_rfc3339("1970-01-01").unwrap().day_of_week(),
+    ///     "Thursday"
+    /// );
+    /// ```
+    pub fn day_of_week(&self) -> &'static str {
+        let mut year = self.year();
+        let mut month = self.month();
+        let day = self.day();
+
+        let dayofweek = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+
+        // adjust months so February is the last one
+        month -= 2;
+        if month < 1 {
+            month += 12;
+            year -= 1;
+        }
+
+        // split by century
+        let cent = year / 100;
+        year %= 100;
+
+        dayofweek
+            [((26 * month - 2) / 10 + day + year + year / 4 + cent / 4 + 5 * cent) as usize % 7]
+    }
+
+    /// the number of seconds between two Datetime
+    /// ```no_run
+    /// assert_eq!(
+    ///     Datetime::now().seconds_since(Datetime::from_rfc3339("1970-01-01").unwrap()),
+    ///     Datetime::timestamp().as_secs() as i64
+    /// );
+    /// ```
+    pub fn seconds_since(&self, earlier: Datetime) -> i64 {
+        let stop = Self {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        let mut start = Self {
+            year: earlier.year,
+            month: earlier.month,
+            day: earlier.day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+
+        let mut ss =
+            (stop.year() - start.year()) * 365 + (stop.month() - start.month()) * 30 + stop.day()
+                - start.day();
+        start.add_days(ss);
+
+        while stop > start {
+            start.add_days(1);
+            ss += 1;
+        }
+        while stop < start {
+            start.add_days(-1);
+            ss -= 1;
+        }
+
+        ss = ss * 24 + self.hour() - earlier.hour();
+        ss = ss * 60 + self.minute() - earlier.minute();
+        ss = ss * 60 + self.second() - earlier.second();
+
+        ss
+    }
+
     /// create from string
     pub fn from_str(dt: &str) -> Option<Self> {
         if let Ok(re) = Regex::new("(\\d+)\\D+(\\d+)\\D+(\\d+)\\D*(\\d*)\\D*(\\d*)\\D*(\\d*)(\\D*)")
@@ -348,6 +431,53 @@ impl Datetime {
             }
         }
 
+        None
+    }
+
+    /// create from rfc3339 string
+    /// ```no_run
+    /// assert_eq!(
+    ///     Datetime::from_rfc3339("2020-01-01 08:00:00+08:00")
+    ///         .unwrap()
+    ///         .to_string(),
+    ///     "2020-01-01 00:00:00"
+    /// );
+    /// ```
+    pub fn from_rfc3339(rfc: &str) -> Option<Self> {
+        if rfc.len() >= 10 {
+            let mut dt = Datetime::default();
+            dt.add_years(rfc[0..4].parse().ok()?);
+            dt.add_months(rfc[5..7].parse().ok()?);
+            dt.add_days(rfc[8..10].parse().ok()?);
+
+            if rfc.len() >= 19 {
+                dt.add_hours(rfc[11..13].parse().ok()?);
+                dt.add_minutes(rfc[14..16].parse().ok()?);
+                dt.add_seconds(rfc[17..19].parse().ok()?);
+
+                if rfc.len() > 19 {
+                    let tail = &rfc[19..];
+                    if let Some(p) = tail.find(&['+', '-']) {
+                        let z: Vec<&str> = tail[p + 1..].split(':').collect();
+                        if z.len() > 0 {
+                            if &tail[p..p + 1] == "+" {
+                                dt.add_hours(-z[0].parse().ok()?);
+                                if z.len() > 1 {
+                                    dt.add_minutes(-z[1].parse().ok()?);
+                                }
+                            } else if &tail[p..p + 1] == "-" {
+                                dt.add_hours(z[0].parse::<i64>().ok()?);
+                                if z.len() > 1 {
+                                    dt.add_minutes(z[1].parse::<i64>().ok()?);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Some(dt);
+        }
         None
     }
 
@@ -410,15 +540,107 @@ impl<'de> Deserialize<'de> for Datetime {
         if s.len() == 0 {
             Ok(Datetime::default())
         } else {
-            match Datetime::from_str(&s) {
-                Some(r) => Ok(r),
-                None => Err(serde::de::Error::custom("The data format is not correct")),
+            if let Some(r) = Datetime::from_rfc3339(&s) {
+                Ok(r)
+            } else if let Some(r) = Datetime::from_str(&s) {
+                Ok(r)
+            } else {
+                Err(serde::de::Error::custom("The data format is not correct"))
             }
         }
     }
 }
 
-#[cfg(feature = "sqlx")]
+#[cfg(feature = "postgres")]
+impl sqlx::Type<sqlx::Postgres> for Datetime {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_name("TIMESTAMP")
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(
+            ty.to_string().as_str(),
+            "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" | "VARCHAR" | "TEXT"
+        )
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl sqlx::Encode<'_, sqlx::Postgres> for Datetime {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        let s = self.seconds_since(Self {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }) * 1000000;
+        sqlx::Encode::<sqlx::Postgres>::encode_by_ref(&s, buf)
+    }
+
+    fn size_hint(&self) -> usize {
+        8
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Datetime
+where
+    i64: sqlx::Decode<'r, sqlx::Postgres>,
+    i32: sqlx::Decode<'r, sqlx::Postgres>,
+    &'r str: sqlx::Decode<'r, sqlx::Postgres>,
+{
+    /// when using TIMESTAMPTZ please pay attention to time zone conversion such as your_timestamp AT TIME ZONE 'your_timezone'
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        match sqlx::ValueRef::type_info(&value)
+            .as_ref()
+            .to_string()
+            .as_str()
+        {
+            "TIMESTAMP" | "TIMESTAMPTZ" => {
+                let mut epoch = Self {
+                    year: 2000,
+                    month: 1,
+                    day: 1,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                };
+                epoch.add_seconds(i64::decode(value)? / 1000000);
+                Ok(epoch)
+            }
+            "DATE" => {
+                let mut epoch = Self {
+                    year: 2000,
+                    month: 1,
+                    day: 1,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                };
+                epoch.add_days(i32::decode(value)? as i64);
+                Ok(epoch)
+            }
+            _ => {
+                let s = <&str>::decode(value)?;
+                let res = if let Some(r) = Datetime::from_rfc3339(s) {
+                    r
+                } else if let Some(r) = Datetime::from_str(s) {
+                    r
+                } else {
+                    Datetime::default()
+                };
+                Ok(res)
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "sqlx", not(feature = "postgres")))]
 impl<'r, DB: sqlx::Database> sqlx::Type<DB> for Datetime
 where
     DB: sqlx::Database,
@@ -429,81 +651,72 @@ where
     }
 
     fn compatible(ty: &DB::TypeInfo) -> bool {
-        match ty.to_string().as_str() {
-            #[cfg(feature = "mysql")]
-            "TIMESTAMP" | "DATETIME" | "DATE" => true,
-            #[cfg(feature = "postgres")]
-            "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" => true,
-            _ => false,
-        }
+        matches!(
+            ty.to_string().as_str(),
+            "TIMESTAMP" | "DATETIME" | "DATE" | "VARCHAR" | "TEXT"
+        )
     }
 }
 
-#[cfg(feature = "sqlx")]
+#[cfg(all(feature = "sqlx", not(feature = "postgres")))]
+impl<'r, DB> sqlx::Encode<'r, DB> for Datetime
+where
+    DB: sqlx::Database,
+    String: sqlx::Encode<'r, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <DB as sqlx::Database>::ArgumentBuffer<'r>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String>::encode(self.to_string(), buf)
+    }
+}
+
+#[cfg(all(feature = "sqlx", not(feature = "postgres")))]
 impl<'r, DB> sqlx::Decode<'r, DB> for Datetime
 where
     DB: sqlx::Database,
     &'r [u8]: sqlx::Decode<'r, DB>,
     &'r str: sqlx::Decode<'r, DB>,
-    i64: sqlx::Decode<'r, DB>,
-    i32: sqlx::Decode<'r, DB>,
 {
     fn decode(
         value: <DB as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
-        Ok(
-            match sqlx::ValueRef::type_info(&value)
-                .as_ref()
-                .to_string()
-                .as_str()
-            {
-                #[cfg(feature = "mysql")]
-                "TIMESTAMP" | "DATETIME" | "DATE" => {
-                    let buf = <&[u8]>::decode(value)?;
-                    let len = buf[0];
-                    let mut dt = Self {
-                        year: ((buf[2] as i64) << 8) + buf[1] as i64,
-                        month: buf[3],
-                        day: buf[4],
-                        hour: 0,
-                        minute: 0,
-                        second: 0,
-                    };
-                    if len > 4 {
-                        dt.hour = buf[5];
-                        dt.minute = buf[6];
-                        dt.second = buf[7];
-                    }
-                    dt
+        match sqlx::ValueRef::type_info(&value)
+            .as_ref()
+            .to_string()
+            .as_str()
+        {
+            #[cfg(feature = "mysql")]
+            "TIMESTAMP" | "DATETIME" | "DATE" => {
+                let buf = <&[u8]>::decode(value)?;
+                let len = buf[0];
+                let mut dt = Self {
+                    year: ((buf[2] as i64) << 8) + buf[1] as i64,
+                    month: buf[3],
+                    day: buf[4],
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                };
+                if len > 4 {
+                    dt.hour = buf[5];
+                    dt.minute = buf[6];
+                    dt.second = buf[7];
                 }
-                #[cfg(feature = "postgres")]
-                "TIMESTAMP" | "TIMESTAMPTZ" => {
-                    let mut epoch = Self {
-                        year: 2000,
-                        month: 1,
-                        day: 1,
-                        hour: 0,
-                        minute: 0,
-                        second: 0,
-                    };
-                    epoch.add_seconds(i64::decode(value)? / 1000000);
-                    epoch
-                }
-                #[cfg(feature = "postgres")]
-                "DATE" => {
-                    let mut epoch = Self {
-                        year: 2000,
-                        month: 1,
-                        day: 1,
-                        hour: 0,
-                        minute: 0,
-                        second: 0,
-                    };
-                    epoch.add_days(i32::decode(value)? as i64);
-                    epoch
-                }
-                _ => Datetime::from_str(<&str>::decode(value)?).unwrap_or_default(),
-            },
-        )
+                Ok(dt)
+            }
+            _ => {
+                let s = <&str>::decode(value)?;
+                let res = if let Some(r) = Datetime::from_rfc3339(s) {
+                    r
+                } else if let Some(r) = Datetime::from_str(s) {
+                    r
+                } else {
+                    Datetime::default()
+                };
+                Ok(res)
+            }
+        }
     }
 }
