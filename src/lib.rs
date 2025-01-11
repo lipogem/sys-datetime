@@ -391,6 +391,52 @@ impl Datetime {
         ss
     }
 
+    /// is the value valid
+    /// ```no_run
+    /// let mut dt = Datetime::default();
+    /// assert!(!dt.is_valid());
+    /// dt.add_seconds(0);
+    /// assert!(dt.is_valid());
+    /// ```
+    pub fn is_valid(&self) -> bool {
+        if self.year == 0 || self.month < 1 || self.month > 12 || self.day < 1 {
+            return false;
+        }
+        match self.month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => {
+                if self.day > 31 {
+                    return false;
+                }
+            }
+            2 => {
+                let yz = if self.year < 0 {
+                    self.year + 1
+                } else {
+                    self.year
+                };
+                if yz % 4 == 0 && (yz % 100 != 0 || yz % 400 == 0) {
+                    if self.day > 29 {
+                        return false;
+                    }
+                } else {
+                    if self.day > 28 {
+                        return false;
+                    }
+                }
+            }
+            4 | 6 | 9 | 11 => {
+                if self.day > 30 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        if self.hour >= 24 || self.minute >= 60 || self.second >= 60 {
+            return false;
+        }
+        true
+    }
+
     /// create from string
     pub fn from_str(dt: &str) -> Option<Self> {
         if let Ok(re) = Regex::new("(\\d+)\\D+(\\d+)\\D+(\\d+)\\D*(\\d*)\\D*(\\d*)\\D*(\\d*)(\\D*)")
@@ -445,15 +491,19 @@ impl Datetime {
     /// ```
     pub fn from_rfc3339(rfc: &str) -> Option<Self> {
         if rfc.len() >= 10 {
-            let mut dt = Datetime::default();
-            dt.add_years(rfc[0..4].parse().ok()?);
-            dt.add_months(rfc[5..7].parse().ok()?);
-            dt.add_days(rfc[8..10].parse().ok()?);
+            let mut dt = Self {
+                year: rfc[0..4].parse().ok()?,
+                month: rfc[5..7].parse().ok()?,
+                day: rfc[8..10].parse().ok()?,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            };
 
             if rfc.len() >= 19 {
-                dt.add_hours(rfc[11..13].parse().ok()?);
-                dt.add_minutes(rfc[14..16].parse().ok()?);
-                dt.add_seconds(rfc[17..19].parse().ok()?);
+                dt.hour = rfc[11..13].parse().ok()?;
+                dt.minute = rfc[14..16].parse().ok()?;
+                dt.second = rfc[17..19].parse().ok()?;
 
                 if rfc.len() > 19 {
                     let tail = &rfc[19..];
